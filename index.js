@@ -31,7 +31,7 @@ function updatePresence() {
     const guildCount = client.guilds.cache.size;
     client.user.setActivity({
         name: `導入サーバー数: ${guildCount}サーバー`,
-        type: ActivityType.Watching // 「〜を観る」 (または ActivityType.Playing などお好みで変更可能)
+        type: ActivityType.Watching // 「〜を観る」
     });
 }
 
@@ -76,14 +76,47 @@ client.on(Events.GuildCreate, async guild => {
     try {
         await guild.commands.set(commands);
         console.log(`新しいサーバー [${guild.name}] にコマンドを登録しました。`);
+
+        // Botがメッセージを送信できる最初のテキストチャンネル（デフォルトチャンネル）を探す
+        const defaultChannel = guild.channels.cache.find(c => 
+            c.type === ChannelType.GuildText && 
+            c.permissionsFor(guild.members.me).has(PermissionFlagsBits.SendMessages)
+        );
+
+        if (defaultChannel) {
+            await defaultChannel.send(
+                '# サーバーに認証Botを入れていただき、ありがとうございます！\n' +
+                'このBotは、サイトで認証をするBotです！\n' +
+                '/auth-create <チャンネル> : 指定したチャンネルに認証メッセージを作成します！\n' +
+                '/auth-delete : 作成した認証メッセージを削除します。Botが再起動された場合は、リセットされてしまうため、手動での削除が必要です。'
+            );
+        }
     } catch (error) {
-        console.error('サーバー参加時のコマンド登録に失敗しました:', error);
+        console.error('サーバー参加時の処理に失敗しました:', error);
     }
 });
 
 // サーバーから退出（削除）されたとき
 client.on(Events.GuildDelete, () => {
     updatePresence(); // カウントを更新
+});
+
+// メンバーの情報が更新されたとき（認証完了によるロール付与を検知してDMを送信）
+client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+    const roleName = '認証済み';
+    
+    // 変更前に「認証済み」ロールを持っておらず、変更後に持っているかチェック
+    const hadRole = oldMember.roles.cache.some(role => role.name === roleName);
+    const hasRole = newMember.roles.cache.some(role => role.name === roleName);
+
+    if (!hadRole && hasRole) {
+        try {
+            await newMember.send(`# ${newMember.guild.name}の認証が完了しました！\nサーバーをお楽しみください！！`);
+            console.log(`[認証完了] ${newMember.user.tag} にDMを送信しました。`);
+        } catch (error) {
+            console.error(`[DM送信エラー] ${newMember.user.tag} (DMがオフに設定されている可能性があります):`, error);
+        }
+    }
 });
 
 client.on(Events.InteractionCreate, async interaction => {
@@ -118,7 +151,8 @@ client.on(Events.InteractionCreate, async interaction => {
                     );
 
                 const message = await channel.send({
-                    content: '### 【サーバー認証】\n下の「認証する」ボタンを押して、認証ページへ進んでください。',
+                    // メッセージを大きく（# 見出し1）変更し、太字に調整
+                    content: '# 【サーバー認証】\n**下の「認証する」ボタンを押して、認証ページへ進んでください。**',
                     components: [row]
                 });
 
