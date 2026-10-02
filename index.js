@@ -81,7 +81,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 if (!authRole) {
                     authRole = await guild.roles.create({
                         name: '認証済み',
-                        color: '#5865F2', // Discordカラー
+                        color: '#1fbb41', // Discordカラー
                         reason: '認証システム用の自動作成ロール',
                     });
                 }
