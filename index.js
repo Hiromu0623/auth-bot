@@ -9,7 +9,8 @@ const {
     PermissionFlagsBits,
     ChannelType,
     Events,
-    MessageFlags
+    MessageFlags,
+    ActivityType // ステータスのアクティビティタイプ指定に必要
 } = require('discord.js');
 const crypto = require('crypto'); // トークン生成用
 
@@ -24,6 +25,15 @@ const client = new Client({
 // サーバーごとの認証メッセージIDやロールIDを保存するストレージ
 const authMessages = new Map();
 const guildRoles = new Map(); // guildId => roleId
+
+// サーバー数をステータス（アクティビティ）に反映する関数
+function updatePresence() {
+    const guildCount = client.guilds.cache.size;
+    client.user.setActivity({
+        name: `導入サーバー数: ${guildCount}サーバー`,
+        type: ActivityType.Watching // 「〜を観る」 (または ActivityType.Playing などお好みで変更可能)
+    });
+}
 
 // スラッシュコマンドの定義
 const commands = [
@@ -47,6 +57,9 @@ const commands = [
 client.once(Events.ClientReady, async () => {
     console.log(`Logged in as ${client.user.tag}`);
 
+    // ステータス（かんがえるところ）にサーバー数を表示
+    updatePresence();
+
     try {
         for (const guild of client.guilds.cache.values()) {
             await guild.commands.set(commands);
@@ -57,13 +70,20 @@ client.once(Events.ClientReady, async () => {
     }
 });
 
+// 新しいサーバーに追加されたとき
 client.on(Events.GuildCreate, async guild => {
+    updatePresence(); // カウントを更新
     try {
         await guild.commands.set(commands);
         console.log(`新しいサーバー [${guild.name}] にコマンドを登録しました。`);
     } catch (error) {
         console.error('サーバー参加時のコマンド登録に失敗しました:', error);
     }
+});
+
+// サーバーから退出（削除）されたとき
+client.on(Events.GuildDelete, () => {
+    updatePresence(); // カウントを更新
 });
 
 client.on(Events.InteractionCreate, async interaction => {
