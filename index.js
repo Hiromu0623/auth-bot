@@ -255,8 +255,18 @@ client.on(Events.InteractionCreate, async interaction => {
 
             const authUrl = `https://hiromu0623-discord-auth.pages.dev/?token=${token}`;
 
+            // URLを開くためのリンクボタンを作成
+            const linkRow = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setLabel('サイトを開く')
+                        .setStyle(ButtonStyle.Link)
+                        .setURL(authUrl)
+                );
+
             await interaction.editReply({
-                content: `認証用のリンクを発行しました！\n以下のリンクからログインを進めてください（※このリンクはあなた専用です）\n\n${authUrl}`
+                content: '認証用のリンクを発行しました！以下のリンクからログインを進めてください',
+                components: [linkRow]
             });
         }
     }
