@@ -10,7 +10,10 @@ const {
     ChannelType,
     Events,
     MessageFlags,
-    ActivityType // ステータスのアクティビティタイプ指定に必要
+    ActivityType,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle
 } = require('discord.js');
 const crypto = require('crypto'); // トークン生成用
 
@@ -151,7 +154,6 @@ client.on(Events.InteractionCreate, async interaction => {
                     );
 
                 const message = await channel.send({
-                    // メッセージを大きく（# 見出し1）変更し、太字に調整
                     content: '# 【サーバー認証】\n**下の「認証する」ボタンを押して、認証ページへ進んでください。**',
                     components: [row]
                 });
@@ -235,7 +237,6 @@ client.on(Events.InteractionCreate, async interaction => {
                     })
                 });
 
-                // レスポンスがJSONかテキストかを安全にチェック
                 const text = await response.text();
                 let result;
                 try {
@@ -255,7 +256,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
             const authUrl = `https://hiromu0623-discord-auth.pages.dev/?token=${token}`;
 
-            // URLを開くためのリンクボタンを作成
+            // リンクボタン用のアクション行と、「別の方法」ボタン用のアクション行（Discordの仕様上、Linkボタンと通常ボタンは別行にする必要があります）
             const linkRow = new ActionRowBuilder()
                 .addComponents(
                     new ButtonBuilder()
@@ -264,9 +265,50 @@ client.on(Events.InteractionCreate, async interaction => {
                         .setURL(authUrl)
                 );
 
+            const altRow = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('alt_auth_btn')
+                        .setLabel('別の方法')
+                        .setStyle(ButtonStyle.Secondary)
+                );
+
             await interaction.editReply({
-                content: '認証用のリンクを発行しました！以下のリンクからログインを進めてください',
-                components: [linkRow]
+                content: '認証用のリンクを発行しました！以下のリンクからログインを進めてください！別の方法を使用するには「別の方法」をクリックしてください。',
+                components: [linkRow, altRow]
+            });
+        }
+        
+        // 「別の方法」ボタンが押されたときの処理
+        else if (interaction.customId === 'alt_auth_btn') {
+            // 画像認証用のモーダル（入力フォーム）を表示する
+            const modal = new ModalBuilder()
+                .setCustomId('alt_auth_modal')
+                .setTitle('画像認証');
+
+            const answerInput = new TextInputBuilder()
+                .setCustomId('answer_input')
+                .setLabel('以下の画像の暗号を見て、答えてください。')
+                .setStyle(TextInputStyle.Short)
+                .setPlaceholder('ここに回答を入力してください')
+                .setRequired(true);
+
+            const row = new ActionRowBuilder().addComponents(answerInput);
+            modal.addComponents(row);
+
+            await interaction.showModal(modal);
+        }
+    }
+
+    // 3. モーダル（画像認証の回答）が送信されたときの処理
+    else if (interaction.isModalSubmit()) {
+        if (interaction.customId === 'alt_auth_modal') {
+            const answer = interaction.fields.getTextInputValue('answer_input');
+
+            // ここで画像認証の回答を検証する処理などを追加できます
+            await interaction.reply({
+                content: `別の方法が選択されたため、画像認証を行います。\n回答を受け付けました: ${answer}`,
+                flags: MessageFlags.Ephemeral
             });
         }
     }
