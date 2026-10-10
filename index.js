@@ -19,7 +19,7 @@ const {
 const crypto = require('crypto');
 const { Captcha } = require('captcha-canvas'); // 画像認証用
 
-// ボットのクライアントを作成（MessageContentインテントを追加）
+// ボットのクライアントを作成
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -34,6 +34,7 @@ const authMessages = new Map();
 const guildRoles = new Map(); // guildId => authRoleId
 const captchaStore = new Map(); // userId => captchaText (画像認証の答え)
 const ticketPanels = new Map(); // messageId => [roleId, roleId...] (チケットアクセス権)
+const pendingAuthInteractions = new Map(); // userId => interaction (認証案内メッセージ編集用)
 
 // セキュリティ用データストレージ
 const securitySettings = new Map(); // guildId => { enabled: boolean, logChannelId: string, exemptChannels: Set<string> }
@@ -147,12 +148,24 @@ client.on(Events.GuildCreate, async guild => {
 
 client.on(Events.GuildDelete, () => updatePresence());
 
+// メンバーのロールが付与されたときの検知（Web認証成功時など）
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     const roleName = '認証済み';
     const hadRole = oldMember.roles.cache.some(role => role.name === roleName);
     const hasRole = newMember.roles.cache.some(role => role.name === roleName);
 
     if (!hadRole && hasRole) {
+        // Web認証でロールが付与された場合、発行済みメッセージを「# 認証が完了しました！」に編集する
+        const pendingInteraction = pendingAuthInteractions.get(newMember.id);
+        if (pendingInteraction) {
+            await pendingInteraction.editReply({
+                content: '# 認証が完了しました！',
+                components: [],
+                files: []
+            }).catch(() => {});
+            pendingAuthInteractions.delete(newMember.id);
+        }
+
         try {
             await newMember.send(`# ${newMember.guild.name}の認証が完了しました！\nサーバーをお楽しみください！！`);
         } catch (error) {}
@@ -198,7 +211,7 @@ client.on(Events.MessageCreate, async message => {
         userTracker.mentions.push(now);
         const last10s = userTracker.mentions.filter(t => now - t <= 10000);
         const last60s = userTracker.mentions.filter(t => now - t <= 60000);
-        userTracker.mentions = last60s; // メモリ節約
+        userTracker.mentions = last60s;
 
         let shouldBan = false;
         let reason = '';
@@ -217,7 +230,7 @@ client.on(Events.MessageCreate, async message => {
         }
     }
 
-    // 3. 連投スパム検知 (直近5分間を記録)
+    // 3. 連投スパム検知
     userTracker.messages.push({ id: message.id, content: message.content, time: now });
     userTracker.messages = userTracker.messages.filter(m => now - m.time <= 300000); 
 
@@ -228,7 +241,7 @@ client.on(Events.MessageCreate, async message => {
     if (sameContentMsgs.length >= 10) {
         const msgIds = sameContentMsgs.map(m => m.id);
         await message.channel.bulkDelete(msgIds).catch(() => {});
-        userTracker.messages = recentMessages.filter(m => m.content !== message.content); // カウントリセット
+        userTracker.messages = recentMessages.filter(m => m.content !== message.content);
         if (member && member.manageable) {
             await member.timeout(60 * 60 * 1000, '同じ言葉を10回連投したため').catch(() => {});
             await handleViolation(member, message.guild, '同じ言葉を10回連投した', '1時間タイムアウト');
@@ -313,7 +326,6 @@ client.on(Events.InteractionCreate, async interaction => {
         else if (commandName === 'auth-delete') {
             const messageId = authMessages.get(guildId);
             if (!messageId) return interaction.reply({ content: '認証メッセージが見つかりません。', flags: MessageFlags.Ephemeral });
-            // メッセージ削除処理（省略せず確実に）
             let deleted = false;
             for (const channel of interaction.guild.channels.cache.values()) {
                 if (!channel.isTextBased()) continue;
@@ -352,16 +364,18 @@ client.on(Events.InteractionCreate, async interaction => {
     else if (interaction.isButton()) {
         // 1. 認証開始ボタン
         if (interaction.customId === 'start_auth') {
-            // すでに認証済みかチェック
             const authRoleId = guildRoles.get(interaction.guildId) || interaction.guild.roles.cache.find(r => r.name === '認証済み')?.id;
             if (authRoleId && interaction.member.roles.cache.has(authRoleId)) {
                 return interaction.reply({ content: '# 認証完了\nあなたは既に認証が完了しています！', flags: MessageFlags.Ephemeral });
             }
 
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            
+            // あとでメッセージを書き換えるためにインタラクションを保持
+            pendingAuthInteractions.set(interaction.user.id, interaction);
+
             const token = crypto.randomBytes(32).toString('hex');
             
-            // Cloudflare APIは省略せずそのまま
             try {
                 const response = await fetch('https://hiromu0623-discord-auth.pages.dev/api/verify', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -376,7 +390,7 @@ client.on(Events.InteractionCreate, async interaction => {
             const authUrl = `https://hiromu0623-discord-auth.pages.dev/auth/?token=${token}`;
             const linkRow = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setLabel('サイトを開く').setStyle(ButtonStyle.Link).setURL(authUrl),
-                new ButtonBuilder().setCustomId('alt_auth_btn').setLabel('別の方法').setStyle(ButtonStyle.Primary) // 青色ボタン
+                new ButtonBuilder().setCustomId('alt_auth_btn').setLabel('別の方法').setStyle(ButtonStyle.Primary)
             );
 
             await interaction.editReply({
@@ -387,16 +401,14 @@ client.on(Events.InteractionCreate, async interaction => {
         
         // 2. 別の方法（画像認証生成）ボタン
         else if (interaction.customId === 'alt_auth_btn') {
-            await interaction.deferUpdate(); // ボタンの読み込みを完了させる
+            await interaction.deferUpdate();
 
-            // キャプチャの生成
             const captcha = new Captcha();
             captcha.async = false;
-            captcha.addDecoy(); // ノイズ追加
-            captcha.drawTrace(); // 線を追加
-            captcha.drawCaptcha(); // テキストを描画
+            captcha.addDecoy();
+            captcha.drawTrace();
+            captcha.drawCaptcha();
 
-            // 正解の文字列をメモリに保存
             captchaStore.set(interaction.user.id, captcha.text);
 
             const attachment = new AttachmentBuilder(captcha.png, { name: 'captcha.png' });
@@ -430,13 +442,11 @@ client.on(Events.InteractionCreate, async interaction => {
             const allowedRoles = ticketPanels.get(interaction.message.id) || [];
             const guild = interaction.guild;
 
-            // チャンネルの権限設定
             const permissionOverwrites = [
-                { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] }, // everyone拒否
-                { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }, // 本人許可
-                { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] } // Bot許可
+                { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+                { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+                { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
             ];
-            // 追加ロールの許可
             for (const roleId of allowedRoles) {
                 if (guild.roles.cache.has(roleId)) {
                     permissionOverwrites.push({ id: roleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] });
@@ -450,11 +460,30 @@ client.on(Events.InteractionCreate, async interaction => {
                     permissionOverwrites: permissionOverwrites
                 });
                 await interaction.reply({ content: `${ticketChannel} が作成されました！`, flags: MessageFlags.Ephemeral });
-                await ticketChannel.send(`<@${interaction.user.id}> チケットを作成しました。用件をご入力ください。`);
+                
+                // チケットチャンネル内に「チケットを削除」ボタン付きメッセージを送信
+                const deleteBtnRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('delete_ticket_btn')
+                        .setLabel('チケットを削除')
+                        .setStyle(ButtonStyle.Danger)
+                        .setEmoji('🗑️')
+                );
+
+                await ticketChannel.send({
+                    content: `<@${interaction.user.id}> チケットを作成しました。用件をご入力ください。`,
+                    components: [deleteBtnRow]
+                });
             } catch (error) {
                 console.error(error);
                 await interaction.reply({ content: 'チケットの作成に失敗しました。', flags: MessageFlags.Ephemeral });
             }
+        }
+
+        // 5. チケット内の削除ボタン
+        else if (interaction.customId === 'delete_ticket_btn') {
+            await interaction.reply({ content: 'このチケット（チャンネル）を削除します...', flags: MessageFlags.Ephemeral });
+            setTimeout(() => interaction.channel.delete().catch(()=>{}), 2000);
         }
     }
 
@@ -466,13 +495,25 @@ client.on(Events.InteractionCreate, async interaction => {
             const correctAnswer = captchaStore.get(interaction.user.id);
 
             if (answer === correctAnswer) {
-                // 正解
+                // 正解時の処理
                 const authRoleId = guildRoles.get(interaction.guildId) || interaction.guild.roles.cache.find(r => r.name === '認証済み')?.id;
                 if (authRoleId) {
                     await interaction.member.roles.add(authRoleId).catch(console.error);
                 }
-                captchaStore.delete(interaction.user.id); // 使い終わったら消す
-                await interaction.reply({ content: '# 認証完了\n画像認証に成功しました！ロールを付与しました。', flags: MessageFlags.Ephemeral });
+                captchaStore.delete(interaction.user.id);
+
+                // 発行元メッセージを「# 認証が完了しました！」に書き換え
+                const pendingInteraction = pendingAuthInteractions.get(interaction.user.id);
+                if (pendingInteraction) {
+                    await pendingInteraction.editReply({
+                        content: '# 認証が完了しました！',
+                        components: [],
+                        files: []
+                    }).catch(() => {});
+                    pendingAuthInteractions.delete(interaction.user.id);
+                }
+
+                await interaction.reply({ content: '画像認証に成功しました！ロールを付与しました。', flags: MessageFlags.Ephemeral });
             } else {
                 // 不正解
                 await interaction.reply({ content: '暗号が間違っています。「別の方法」または「回答」ボタンからやり直してください。', flags: MessageFlags.Ephemeral });
@@ -485,7 +526,6 @@ client.on(Events.InteractionCreate, async interaction => {
             const desc = interaction.fields.getTextInputValue('ticket_desc');
             const rolesStr = interaction.fields.getTextInputValue('ticket_roles');
             
-            // ロールIDをカンマで分割して配列にする（空白除去）
             const roleIds = rolesStr ? rolesStr.split(',').map(id => id.trim()).filter(id => id.length > 0) : [];
 
             const row = new ActionRowBuilder().addComponents(
@@ -497,7 +537,6 @@ client.on(Events.InteractionCreate, async interaction => {
                 components: [row]
             });
 
-            // このパネルから作られるチケットにアクセスできるロールを保存
             ticketPanels.set(panelMessage.id, roleIds);
 
             await interaction.reply({ content: 'チケットパネルを生成しました。', flags: MessageFlags.Ephemeral });
