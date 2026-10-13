@@ -18,6 +18,9 @@ const {
 } = require('discord.js');
 const crypto = require('crypto');
 const { Captcha } = require('captcha-canvas'); // 画像認証用
+const { createCanvas } = require('canvas'); // 入退室カード生成用
+const fs = require('fs');
+const path = require('path');
 
 // ボットのクライアントを作成
 const client = new Client({
@@ -29,7 +32,7 @@ const client = new Client({
     ]
 });
 
-// 各種データストレージ（メモリ保存）
+// 各種データストレージ（メモリ + 永続化）
 const authMessages = new Map();
 const guildRoles = new Map(); // guildId => authRoleId
 const captchaStore = new Map(); // userId => captchaText (画像認証の答え)
@@ -39,6 +42,154 @@ const pendingAuthInteractions = new Map(); // userId => interaction (認証案�
 // セキュリティ用データストレージ
 const securitySettings = new Map(); // guildId => { enabled: boolean, logChannelId: string, exemptChannels: Set<string> }
 const spamTracker = new Map(); // guildId => Map(userId => { mentions: [timestamp], messages: [{id, content, time}] })
+
+// 入退室メッセージ設定
+const welcomeSettings = new Map(); // guildId => { channelId, message }
+const quitSettings = new Map(); // guildId => { channelId, message }
+
+// ----------------------------------------------------
+// データの永続化（再起動対策）
+// ----------------------------------------------------
+const DB_FILE = path.join(__dirname, 'database.json');
+
+function loadDatabase() {
+    if (fs.existsSync(DB_FILE)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+            if (data.securitySettings) for (const [k, v] of Object.entries(data.securitySettings)) securitySettings.set(k, { ...v, exemptChannels: new Set(v.exemptChannels) });
+            if (data.guildRoles) for (const [k, v] of Object.entries(data.guildRoles)) guildRoles.set(k, v);
+            if (data.authMessages) for (const [k, v] of Object.entries(data.authMessages)) authMessages.set(k, v);
+            if (data.ticketPanels) for (const [k, v] of Object.entries(data.ticketPanels)) ticketPanels.set(k, v);
+            if (data.welcomeSettings) for (const [k, v] of Object.entries(data.welcomeSettings)) welcomeSettings.set(k, v);
+            if (data.quitSettings) for (const [k, v] of Object.entries(data.quitSettings)) quitSettings.set(k, v);
+            console.log('データベースをロードしました。');
+        } catch (e) {
+            console.error('データベースロードエラー:', e);
+        }
+    }
+}
+
+function saveDatabase() {
+    try {
+        const data = {
+            securitySettings: Object.fromEntries(Array.from(securitySettings.entries()).map(([k, v]) => [k, { ...v, exemptChannels: Array.from(v.exemptChannels) }])),
+            guildRoles: Object.fromEntries(guildRoles.entries()),
+            authMessages: Object.fromEntries(authMessages.entries()),
+            ticketPanels: Object.fromEntries(ticketPanels.entries()),
+            welcomeSettings: Object.fromEntries(welcomeSettings.entries()),
+            quitSettings: Object.fromEntries(quitSettings.entries())
+        };
+        fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf8');
+    } catch (e) {
+        console.error('データベース保存エラー:', e);
+    }
+}
+
+// ----------------------------------------------------
+// 入退室カード生成関数 (Canvas)
+// ----------------------------------------------------
+async function createWelcomeCard(member, customMessage) {
+    const canvas = createCanvas(1200, 675);
+    const ctx = canvas.getContext('2d');
+
+    // パステルグラデーション背景
+    const grad = ctx.createLinearGradient(0, 0, 1200, 675);
+    grad.addColorStop(0, '#d1c4e9');
+    grad.addColorStop(0.5, '#b2dfdb');
+    grad.addColorStop(1, '#ffccbc');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 1200, 675);
+
+    // 装飾の丸
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.beginPath();
+    ctx.arc(200, 150, 180, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(1000, 500, 220, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#000000';
+    ctx.textBaseline = 'middle';
+
+    const startX = 150;
+    const startY = 220;
+
+    // 1. ユーザー名 (サイズ 73.8)
+    ctx.font = 'bold 73.8px sans-serif';
+    const userName = member.user.username;
+    ctx.fillText(userName, startX, startY);
+    const userNameWidth = ctx.measureText(userName).width;
+    ctx.fillText('さん', startX + userNameWidth + 10, startY);
+
+    // 2. が [サーバー名] に参加しました！ (サイズ 58)
+    ctx.font = 'bold 58px sans-serif';
+    const line2Y = startY + 110;
+    ctx.fillText('が', startX, line2Y);
+
+    const guildName = member.guild.name;
+    const gaWidth = ctx.measureText('が').width;
+    ctx.fillText(guildName, startX + gaWidth + 20, line2Y);
+    const guildNameWidth = ctx.measureText(guildName).width;
+
+    ctx.fillText('に参加しました！', startX + gaWidth + 20 + guildNameWidth + 10, line2Y);
+
+    // 3. 真ん中の一番下側のカスタムメッセージ (サイズ 58)
+    ctx.font = 'bold 58px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(customMessage, 600, 530);
+
+    return new AttachmentBuilder(canvas.toBuffer(), { name: 'welcome.png' });
+}
+
+async function createQuitCard(member, customMessage) {
+    const canvas = createCanvas(1200, 675);
+    const ctx = canvas.getContext('2d');
+
+    const grad = ctx.createLinearGradient(0, 0, 1200, 675);
+    grad.addColorStop(0, '#cfd8dc');
+    grad.addColorStop(0.5, '#b0bec5');
+    grad.addColorStop(1, '#90a4ae');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 1200, 675);
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.beginPath();
+    ctx.arc(300, 200, 200, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#000000';
+    ctx.textBaseline = 'middle';
+
+    const startX = 150;
+    const startY = 220;
+
+    // 1. ユーザー名 + さん (サイズ 73.8)
+    ctx.font = 'bold 73.8px sans-serif';
+    const userName = member.user.username;
+    ctx.fillText(userName, startX, startY);
+    const userNameWidth = ctx.measureText(userName).width;
+    ctx.fillText('さん', startX + userNameWidth + 10, startY);
+
+    // 2. が [サーバー名] を退出しました。 (サイズ 58)
+    ctx.font = 'bold 58px sans-serif';
+    const line2Y = startY + 110;
+    ctx.fillText('が', startX, line2Y);
+
+    const guildName = member.guild.name;
+    const gaWidth = ctx.measureText('が').width;
+    ctx.fillText(guildName, startX + gaWidth + 20, line2Y);
+    const guildNameWidth = ctx.measureText(guildName).width;
+
+    ctx.fillText('を退出しました。', startX + gaWidth + 20 + guildNameWidth + 10, line2Y);
+
+    // 3. カスタムメッセージ (サイズ 58)
+    ctx.font = 'bold 58px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(customMessage, 600, 530);
+
+    return new AttachmentBuilder(canvas.toBuffer(), { name: 'quit.png' });
+}
 
 function updatePresence() {
     const guildCount = client.guilds.cache.size;
@@ -50,7 +201,6 @@ function updatePresence() {
 
 // 違反時のDM＆ログ送信関数
 async function handleViolation(member, guild, reason, punishment) {
-    // DM送信
     try {
         await member.send(
             `# 違反が検知されました\nあなたは${guild.name}で${reason}をしたため、**${punishment}**されました。`
@@ -58,7 +208,6 @@ async function handleViolation(member, guild, reason, punishment) {
     } catch (e) {
         console.error('DM送信エラー (スパム処罰):', e);
     }
-    // ログ送信
     const settings = securitySettings.get(guild.id);
     if (settings && settings.logChannelId) {
         const logChannel = guild.channels.cache.get(settings.logChannelId);
@@ -114,10 +263,25 @@ const commands = [
         .setName('security-log')
         .setDescription('人が違反した場合に表示するチャンネルを設定します。')
         .addChannelOption(option => option.setName('channel').setDescription('ログを送信するチャンネル').setRequired(true))
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+    // 入退室メッセージ系
+    new SlashCommandBuilder()
+        .setName('welcome-create')
+        .setDescription('入室メッセージカードを設定します（もう一度同じ設定で実行するとオフになります）')
+        .addChannelOption(option => option.setName('channel').setDescription('入室メッセージを送信するチャンネル').addChannelTypes(ChannelType.GuildText).setRequired(true))
+        .addStringOption(option => option.setName('message').setDescription('カードに表示するメッセージ').setRequired(true))
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    new SlashCommandBuilder()
+        .setName('quit-create')
+        .setDescription('退出メッセージカードを設定します（もう一度同じ設定で実行するとオフになります）')
+        .addChannelOption(option => option.setName('channel').setDescription('退出メッセージを送信するチャンネル').addChannelTypes(ChannelType.GuildText).setRequired(true))
+        .addStringOption(option => option.setName('message').setDescription('カードに表示するメッセージ').setRequired(true))
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 ];
 
 client.once(Events.ClientReady, async () => {
+    loadDatabase(); // 起動時にデータを読み込む
     console.log(`Logged in as ${client.user.tag}`);
     updatePresence();
     try {
@@ -140,13 +304,51 @@ client.on(Events.GuildCreate, async guild => {
                 '# サーバーに認証Botを入れていただき、ありがとうございます！\n' +
                 'このBotは、サイトで認証をするBotです！\n' +
                 '/auth-create <チャンネル> : 指定したチャンネルに認証メッセージを作成します！\n' +
-                '/auth-delete : 作成した認証メッセージを削除します。Botが再起動された場合は、リセットされてしまうため、手動での削除が必要です。'
+                '/welcome-create <チャンネル> <メッセージ> : 入室メッセージカードを設定します！\n' +
+                '/quit-create <チャンネル> <メッセージ> : 退出メッセージカードを設定します！'
             );
         }
     } catch (error) {}
 });
 
 client.on(Events.GuildDelete, () => updatePresence());
+
+// ----------------------------------------------------
+// 入退室イベント検知
+// ----------------------------------------------------
+client.on(Events.GuildMemberAdd, async member => {
+    const setting = welcomeSettings.get(member.guild.id);
+    if (!setting) return;
+    const channel = member.guild.channels.cache.get(setting.channelId);
+    if (!channel) return;
+
+    try {
+        const attachment = await createWelcomeCard(member, setting.message);
+        await channel.send({
+            content: `👋 <@${member.id}> さん、ようこそ！`,
+            files: [attachment]
+        });
+    } catch (e) {
+        console.error('入室メッセージ送信エラー:', e);
+    }
+});
+
+client.on(Events.GuildMemberRemove, async member => {
+    const setting = quitSettings.get(member.guild.id);
+    if (!setting) return;
+    const channel = member.guild.channels.cache.get(setting.channelId);
+    if (!channel) return;
+
+    try {
+        const attachment = await createQuitCard(member, setting.message);
+        await channel.send({
+            content: `👋 ${member.user.tag} さんが退出しました。`,
+            files: [attachment]
+        });
+    } catch (e) {
+        console.error('退出メッセージ送信エラー:', e);
+    }
+});
 
 // メンバーのロールが付与されたときの検知（Web認証成功時など）
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
@@ -155,7 +357,6 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     const hasRole = newMember.roles.cache.some(role => role.name === roleName);
 
     if (!hadRole && hasRole) {
-        // Web認証でロールが付与された場合、発行済みメッセージを「# 認証が完了しました！」に編集する
         const pendingInteraction = pendingAuthInteractions.get(newMember.id);
         if (pendingInteraction) {
             await pendingInteraction.editReply({
@@ -181,7 +382,6 @@ client.on(Events.MessageCreate, async message => {
     const guildId = message.guild.id;
     const settings = securitySettings.get(guildId);
     
-    // セキュリティがオフ、または対象外チャンネル、または管理者の場合はスキップ
     if (!settings || !settings.enabled) return;
     if (settings.exemptChannels.has(message.channel.id)) return;
     if (message.member && message.member.permissions.has(PermissionFlagsBits.Administrator)) return;
@@ -236,7 +436,6 @@ client.on(Events.MessageCreate, async message => {
 
     const recentMessages = userTracker.messages;
     
-    // 同じ言葉を10回連投
     const sameContentMsgs = recentMessages.filter(m => m.content === message.content);
     if (sameContentMsgs.length >= 10) {
         const msgIds = sameContentMsgs.map(m => m.id);
@@ -249,7 +448,6 @@ client.on(Events.MessageCreate, async message => {
         return;
     }
 
-    // 短い言葉(5文字以下)を20回以上連投
     if (message.content.length <= 5) {
         const shortMsgs = recentMessages.filter(m => m.content.length <= 5);
         if (shortMsgs.length >= 20) {
@@ -281,27 +479,64 @@ client.on(Events.InteractionCreate, async interaction => {
 
             if (commandName === 'security-on') {
                 settings.enabled = true;
+                saveDatabase();
                 return interaction.reply({ content: '✅ スパム・荒らし対策モードを **オン** にしました。', flags: MessageFlags.Ephemeral });
             } 
             else if (commandName === 'security-off') {
                 settings.enabled = false;
+                saveDatabase();
                 return interaction.reply({ content: '⚠️ スパム・荒らし対策モードを **オフ** にしました。', flags: MessageFlags.Ephemeral });
             }
             else if (commandName === 'security-channel-off') {
                 const channel = interaction.options.getChannel('channel');
                 settings.exemptChannels.add(channel.id);
+                saveDatabase();
                 return interaction.reply({ content: `✅ ${channel} を対策の監視対象から **除外** しました。`, flags: MessageFlags.Ephemeral });
             }
             else if (commandName === 'security-channel-on') {
                 const channel = interaction.options.getChannel('channel');
                 settings.exemptChannels.delete(channel.id);
+                saveDatabase();
                 return interaction.reply({ content: `✅ ${channel} の除外を解除し、監視対象に **戻し** ました。`, flags: MessageFlags.Ephemeral });
             }
             else if (commandName === 'security-log') {
                 const channel = interaction.options.getChannel('channel');
                 settings.logChannelId = channel.id;
+                saveDatabase();
                 return interaction.reply({ content: `✅ 違反ログの送信先を ${channel} に設定しました。`, flags: MessageFlags.Ephemeral });
             }
+        }
+
+        // --- 入退室設定コマンド ---
+        else if (commandName === 'welcome-create') {
+            const channel = interaction.options.getChannel('channel');
+            const messageText = interaction.options.getString('message');
+
+            const current = welcomeSettings.get(guildId);
+            if (current && current.channelId === channel.id && current.message === messageText) {
+                welcomeSettings.delete(guildId);
+                saveDatabase();
+                return interaction.reply({ content: '✅ 入室メッセージ機能を **オフ** にしました。', flags: MessageFlags.Ephemeral });
+            }
+
+            welcomeSettings.set(guildId, { channelId: channel.id, message: messageText });
+            saveDatabase();
+            return interaction.reply({ content: `✅ 入室メッセージを ${channel} に設定しました！\nメッセージ: ${messageText}\n(もう一度同じ設定で実行するとオフになります)`, flags: MessageFlags.Ephemeral });
+        }
+        else if (commandName === 'quit-create') {
+            const channel = interaction.options.getChannel('channel');
+            const messageText = interaction.options.getString('message');
+
+            const current = quitSettings.get(guildId);
+            if (current && current.channelId === channel.id && current.message === messageText) {
+                quitSettings.delete(guildId);
+                saveDatabase();
+                return interaction.reply({ content: '✅ 退出メッセージ機能を **オフ** にしました。', flags: MessageFlags.Ephemeral });
+            }
+
+            quitSettings.set(guildId, { channelId: channel.id, message: messageText });
+            saveDatabase();
+            return interaction.reply({ content: `✅ 退出メッセージを ${channel} に設定しました！\nメッセージ: ${messageText}\n(もう一度同じ設定で実行するとオフになります)`, flags: MessageFlags.Ephemeral });
         }
 
         // --- 認証系コマンド ---
@@ -318,6 +553,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 );
                 const message = await channel.send({ content: '# 【サーバー認証】\n下の「認証する」ボタンを押して、認証ページへ進んでください。', components: [row] });
                 authMessages.set(guild.id, message.id);
+                saveDatabase();
                 await interaction.reply({ content: '認証メッセージを設置しました！', flags: MessageFlags.Ephemeral });
             } catch (error) {
                 await interaction.reply({ content: 'エラーが発生しました。Botの権限を確認してください。', flags: MessageFlags.Ephemeral });
@@ -335,6 +571,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 } catch (e) {}
             }
             authMessages.delete(guildId);
+            saveDatabase();
             await interaction.reply({ content: deleted ? '認証メッセージを削除しました。' : '見つかりませんでした。', flags: MessageFlags.Ephemeral });
         }
 
@@ -369,30 +606,19 @@ client.on(Events.InteractionCreate, async interaction => {
                 return interaction.reply({ content: '# 認証完了\nあなたは既に認証が完了しています！', flags: MessageFlags.Ephemeral });
             }
 
-            console.log('[Auth] 認証ボタンが押されました。処理を開始します...');
-            
             const token = crypto.randomBytes(32).toString('hex');
-            console.log('[Auth] トークン生成完了:', token);
             
             try {
-                console.log('[Auth] Cloudflare APIへ通信送信中...');
                 const response = await fetch('https://hiromu0623-discord-auth.pages.dev/api/verify', {
                     method: 'POST', 
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'register', token: token, guildId: interaction.guildId, userId: interaction.user.id })
                 });
-                
-                console.log('[Auth] Cloudflareからのレスポンス受信 Status:', response.status);
-                const text = await response.text();
-                console.log('[Auth] レスポンス本文:', text);
-                
-                const result = JSON.parse(text);
+                const result = await response.json();
                 if (!result.success) {
-                    console.log('[Auth] APIがエラーを返しました:', result.error);
                     return interaction.reply({ content: '認証の初期化に失敗しました。', flags: MessageFlags.Ephemeral });
                 }
             } catch (err) {
-                console.error('[Auth] 通信または解析でエラー発生:', err);
                 return interaction.reply({ content: '通信エラーが発生しました。', flags: MessageFlags.Ephemeral });
             }
 
@@ -402,16 +628,12 @@ client.on(Events.InteractionCreate, async interaction => {
                 new ButtonBuilder().setCustomId('alt_auth_btn').setLabel('別の方法').setStyle(ButtonStyle.Primary)
             );
 
-            // deferReplyを使わず、直接 reply（Ephemeral）で送信する
             await interaction.reply({
                 content: '認証用のリンクを発行しました！以下のリンクからログインを進めてください',
                 components: [linkRow],
                 flags: MessageFlags.Ephemeral
             });
-            
-            console.log('[Auth] 認証リンクの送信が完了しました！');
         }
-
         
         // 2. 別の方法（画像認証生成）ボタン
         else if (interaction.customId === 'alt_auth_btn') {
@@ -475,7 +697,6 @@ client.on(Events.InteractionCreate, async interaction => {
                 });
                 await interaction.reply({ content: `${ticketChannel} が作成されました！`, flags: MessageFlags.Ephemeral });
                 
-                // チケットチャンネル内に「チケットを削除」ボタン付きメッセージを送信
                 const deleteBtnRow = new ActionRowBuilder().addComponents(
                     new ButtonBuilder()
                         .setCustomId('delete_ticket_btn')
@@ -503,20 +724,17 @@ client.on(Events.InteractionCreate, async interaction => {
 
     // --- モーダル送信処理 ---
     else if (interaction.isModalSubmit()) {
-        // 1. 画像認証の回答
         if (interaction.customId === 'captcha_answer_modal') {
             const answer = interaction.fields.getTextInputValue('captcha_answer_input');
             const correctAnswer = captchaStore.get(interaction.user.id);
 
             if (answer === correctAnswer) {
-                // 正解時の処理
                 const authRoleId = guildRoles.get(interaction.guildId) || interaction.guild.roles.cache.find(r => r.name === '認証済み')?.id;
                 if (authRoleId) {
                     await interaction.member.roles.add(authRoleId).catch(console.error);
                 }
                 captchaStore.delete(interaction.user.id);
 
-                // 発行元メッセージを「# 認証が完了しました！」に書き換え
                 const pendingInteraction = pendingAuthInteractions.get(interaction.user.id);
                 if (pendingInteraction) {
                     await pendingInteraction.editReply({
@@ -529,12 +747,10 @@ client.on(Events.InteractionCreate, async interaction => {
 
                 await interaction.reply({ content: '画像認証に成功しました！ロールを付与しました。', flags: MessageFlags.Ephemeral });
             } else {
-                // 不正解
                 await interaction.reply({ content: '暗号が間違っています。「別の方法」または「回答」ボタンからやり直してください。', flags: MessageFlags.Ephemeral });
             }
         }
 
-        // 2. チケットパネルの作成
         else if (interaction.customId === 'ticket_create_modal') {
             const title = interaction.fields.getTextInputValue('ticket_title');
             const desc = interaction.fields.getTextInputValue('ticket_desc');
@@ -552,6 +768,7 @@ client.on(Events.InteractionCreate, async interaction => {
             });
 
             ticketPanels.set(panelMessage.id, roleIds);
+            saveDatabase();
 
             await interaction.reply({ content: 'チケットパネルを生成しました。', flags: MessageFlags.Ephemeral });
         }
