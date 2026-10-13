@@ -405,11 +405,16 @@ client.on(Events.InteractionCreate, async interaction => {
                 new ButtonBuilder().setCustomId('alt_auth_btn').setLabel('別の方法').setStyle(ButtonStyle.Primary)
             );
 
-            await interaction.editReply({
-                content: '認証用のリンクを発行しました！以下のリンクからログインを進めてください',
-                components: [linkRow]
-            });
-            console.log('[Auth] 認証リンクの送信が完了しました！');
+            try {
+                console.log('[Auth] DiscordへeditReply送信中...');
+                await interaction.editReply({
+                    content: '認証用のリンクを発行しました！以下のリンクからログインを進めてください',
+                    components: [linkRow]
+                });
+                console.log('[Auth] 認証リンクの送信が完了しました！');
+            } catch (editErr) {
+                console.error('[Auth] editReplyでエラー発生:', editErr);
+            }
         }
         
         // 2. 別の方法（画像認証生成）ボタン
