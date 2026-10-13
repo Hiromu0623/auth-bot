@@ -73,7 +73,9 @@ const DB_FILE = path.join(__dirname, 'database.json');
 function loadDatabase() {
     if (fs.existsSync(DB_FILE)) {
         try {
-            const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+            const content = fs.readFileSync(DB_FILE, 'utf8').trim();
+            if (!content) return; // 空ファイルならスキップ
+            const data = JSON.parse(content);
             if (data.securitySettings) for (const [k, v] of Object.entries(data.securitySettings)) securitySettings.set(k, { ...v, exemptChannels: new Set(v.exemptChannels) });
             if (data.guildRoles) for (const [k, v] of Object.entries(data.guildRoles)) guildRoles.set(k, v);
             if (data.authMessages) for (const [k, v] of Object.entries(data.authMessages)) authMessages.set(k, v);
