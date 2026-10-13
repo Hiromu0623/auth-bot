@@ -363,6 +363,7 @@ client.on(Events.InteractionCreate, async interaction => {
     // --- ボタン処理 ---
     else if (interaction.isButton()) {
         // 1. 認証開始ボタン
+        // 1. 認証開始ボタン
         if (interaction.customId === 'start_auth') {
             const authRoleId = guildRoles.get(interaction.guildId) || interaction.guild.roles.cache.find(r => r.name === '認証済み')?.id;
             if (authRoleId && interaction.member.roles.cache.has(authRoleId)) {
@@ -406,16 +407,22 @@ client.on(Events.InteractionCreate, async interaction => {
             );
 
             try {
-                console.log('[Auth] DiscordへeditReply送信中...');
-                await interaction.editReply({
+                console.log('[Auth] DiscordへfollowUp送信中...');
+                
+                await interaction.editReply({ content: '認証の準備ができました！下のボタンから進んでください。' }).catch(() => {});
+                
+                await interaction.followUp({
                     content: '認証用のリンクを発行しました！以下のリンクからログインを進めてください',
-                    components: [linkRow]
+                    components: [linkRow],
+                    flags: MessageFlags.Ephemeral
                 });
+                
                 console.log('[Auth] 認証リンクの送信が完了しました！');
             } catch (editErr) {
-                console.error('[Auth] editReplyでエラー発生:', editErr);
+                console.error('[Auth] 送信時にエラー発生:', editErr);
             }
         }
+
         
         // 2. 別の方法（画像認証生成）ボタン
         else if (interaction.customId === 'alt_auth_btn') {
