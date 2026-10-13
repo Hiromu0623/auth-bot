@@ -363,7 +363,6 @@ client.on(Events.InteractionCreate, async interaction => {
     // --- ボタン処理 ---
     else if (interaction.isButton()) {
         // 1. 認証開始ボタン
-        // 1. 認証開始ボタン
         if (interaction.customId === 'start_auth') {
             const authRoleId = guildRoles.get(interaction.guildId) || interaction.guild.roles.cache.find(r => r.name === '認証済み')?.id;
             if (authRoleId && interaction.member.roles.cache.has(authRoleId)) {
@@ -371,10 +370,7 @@ client.on(Events.InteractionCreate, async interaction => {
             }
 
             console.log('[Auth] 認証ボタンが押されました。処理を開始します...');
-            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
             
-            pendingAuthInteractions.set(interaction.user.id, interaction);
-
             const token = crypto.randomBytes(32).toString('hex');
             console.log('[Auth] トークン生成完了:', token);
             
@@ -393,11 +389,11 @@ client.on(Events.InteractionCreate, async interaction => {
                 const result = JSON.parse(text);
                 if (!result.success) {
                     console.log('[Auth] APIがエラーを返しました:', result.error);
-                    return interaction.editReply({ content: '認証の初期化に失敗しました。' });
+                    return interaction.reply({ content: '認証の初期化に失敗しました。', flags: MessageFlags.Ephemeral });
                 }
             } catch (err) {
                 console.error('[Auth] 通信または解析でエラー発生:', err);
-                return interaction.editReply({ content: '通信エラーが発生しました。' });
+                return interaction.reply({ content: '通信エラーが発生しました。', flags: MessageFlags.Ephemeral });
             }
 
             const authUrl = `https://hiromu0623-discord-auth.pages.dev/auth/?token=${token}`;
@@ -406,21 +402,14 @@ client.on(Events.InteractionCreate, async interaction => {
                 new ButtonBuilder().setCustomId('alt_auth_btn').setLabel('別の方法').setStyle(ButtonStyle.Primary)
             );
 
-            try {
-                console.log('[Auth] DiscordへfollowUp送信中...');
-                
-                await interaction.editReply({ content: '認証の準備ができました！下のボタンから進んでください。' }).catch(() => {});
-                
-                await interaction.followUp({
-                    content: '認証用のリンクを発行しました！以下のリンクからログインを進めてください',
-                    components: [linkRow],
-                    flags: MessageFlags.Ephemeral
-                });
-                
-                console.log('[Auth] 認証リンクの送信が完了しました！');
-            } catch (editErr) {
-                console.error('[Auth] 送信時にエラー発生:', editErr);
-            }
+            // deferReplyを使わず、直接 reply（Ephemeral）で送信する
+            await interaction.reply({
+                content: '認証用のリンクを発行しました！以下のリンクからログインを進めてください',
+                components: [linkRow],
+                flags: MessageFlags.Ephemeral
+            });
+            
+            console.log('[Auth] 認証リンクの送信が完了しました！');
         }
 
         
