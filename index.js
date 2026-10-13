@@ -25,7 +25,7 @@ const path = require('path');
 // ----------------------------------------------------
 // 日本語フォントの読み込み設定
 // ----------------------------------------------------
-const fontPath = path.join(__dirname, 'font.ttf');
+const fontPath = path.join(__dirname, 'font.otf');
 let FONT_FAMILY = 'sans-serif';
 
 if (fs.existsSync(fontPath)) {
