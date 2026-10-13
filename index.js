@@ -108,6 +108,9 @@ function saveDatabase() {
 // ----------------------------------------------------
 // 入退室カード生成関数 (Canvas)
 // ----------------------------------------------------
+// ----------------------------------------------------
+// 入退室カード生成関数 (Canvas)
+// ----------------------------------------------------
 async function createWelcomeCard(member, customMessage) {
     const canvas = createCanvas(1200, 675);
     const ctx = canvas.getContext('2d');
@@ -123,43 +126,125 @@ async function createWelcomeCard(member, customMessage) {
     // 装飾の丸
     ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
     ctx.beginPath();
-    ctx.arc(200, 150, 180, 0, Math.PI * 2);
+    ctx.arc(200, 150, 120, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
     ctx.arc(1000, 500, 220, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#000000';
+    // ユーザーのアバターアイコンを描画
+    try {
+        const avatarUrl = member.user.displayAvatarURL({ extension: 'png', size: 256 });
+        const avatarImage = await loadImage(avatarUrl);
+        drawCircularImage(ctx, avatarImage, 200, 150, 110);
+    } catch (e) {
+        console.error('アバター画像の読み込みエラー:', e);
+    }
+
     ctx.textBaseline = 'middle';
+    ctx.strokeStyle = '#000000'; // 輪郭（太さ調整用）
+    ctx.fillStyle = '#000000';   // 文字の色
+    ctx.lineWidth = 3;           // 太さの度合い（3〜4がおすすめ）
 
-    const startX = 150;
-    const startY = 220;
+    const startX = 350; // アイコンの右側にテキストを開始
+    const startY = 150;
 
-    // 1. ユーザー名 (サイズ 73.8)
+    // 1. ユーザー名 + さん (サイズ 73.8)
     ctx.font = `bold 73.8px ${FONT_FAMILY}`;
+    ctx.textAlign = 'left';
     const userName = member.user.username;
+    
+    // 輪郭と塗りつぶしを重ねて太字を強調
+    ctx.strokeText(userName, startX, startY);
     ctx.fillText(userName, startX, startY);
+    
     const userNameWidth = ctx.measureText(userName).width;
-    ctx.fillText('さん', startX + userNameWidth + 10, startY);
+    const sanX = startX + userNameWidth + 15;
+    
+    ctx.strokeText('さん', sanX, startY);
+    ctx.fillText('さん', sanX, startY);
 
     // 2. が [サーバー名] に参加しました！ (サイズ 58)
     ctx.font = `bold 58px ${FONT_FAMILY}`;
-    const line2Y = startY + 110;
-    ctx.fillText('が', startX, line2Y);
-
-    const guildName = member.guild.name;
-    const gaWidth = ctx.measureText('が').width;
-    ctx.fillText(guildName, startX + gaWidth + 20, line2Y);
-    const guildNameWidth = ctx.measureText(guildName).width;
-
-    ctx.fillText('に参加しました！', startX + gaWidth + 20 + guildNameWidth + 10, line2Y);
+    const line2Y = startY + 120;
+    const line2Text = `が ${member.guild.name} に参加しました！`;
+    
+    ctx.strokeText(line2Text, 100, line2Y);
+    ctx.fillText(line2Text, 100, line2Y);
 
     // 3. 真ん中の一番下側のカスタムメッセージ (サイズ 58)
     ctx.font = `bold 58px ${FONT_FAMILY}`;
     ctx.textAlign = 'center';
-    ctx.fillText(customMessage, 600, 530);
+    
+    ctx.strokeText(customMessage, 600, 520);
+    ctx.fillText(customMessage, 600, 520);
 
     return new AttachmentBuilder(canvas.toBuffer(), { name: 'welcome.png' });
+}
+
+async function createQuitCard(member, customMessage) {
+    const canvas = createCanvas(1200, 675);
+    const ctx = canvas.getContext('2d');
+
+    const grad = ctx.createLinearGradient(0, 0, 1200, 675);
+    grad.addColorStop(0, '#cfd8dc');
+    grad.addColorStop(0.5, '#b0bec5');
+    grad.addColorStop(1, '#90a4ae');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 1200, 675);
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.beginPath();
+    ctx.arc(300, 200, 200, 0, Math.PI * 2);
+    ctx.fill();
+
+    // ユーザーのアバターアイコンを描画
+    try {
+        const avatarUrl = member.user.displayAvatarURL({ extension: 'png', size: 256 });
+        const avatarImage = await loadImage(avatarUrl);
+        drawCircularImage(ctx, avatarImage, 200, 150, 110);
+    } catch (e) {
+        console.error('アバター画像の読み込みエラー:', e);
+    }
+
+    ctx.textBaseline = 'middle';
+    ctx.strokeStyle = '#000000';
+    ctx.fillStyle = '#000000';
+    ctx.lineWidth = 3;
+
+    const startX = 350;
+    const startY = 150;
+
+    // 1. ユーザー名 + さん (サイズ 73.8)
+    ctx.font = `bold 73.8px ${FONT_FAMILY}`;
+    ctx.textAlign = 'left';
+    const userName = member.user.username;
+    
+    ctx.strokeText(userName, startX, startY);
+    ctx.fillText(userName, startX, startY);
+    
+    const userNameWidth = ctx.measureText(userName).width;
+    const sanX = startX + userNameWidth + 15;
+    
+    ctx.strokeText('さん', sanX, startY);
+    ctx.fillText('さん', sanX, startY);
+
+    // 2. が [サーバー名] を退出しました。 (サイズ 58)
+    ctx.font = `bold 58px ${FONT_FAMILY}`;
+    const line2Y = startY + 120;
+    const line2Text = `が ${member.guild.name} を退出しました。`;
+    
+    ctx.strokeText(line2Text, 100, line2Y);
+    ctx.fillText(line2Text, 100, line2Y);
+
+    // 3. カスタムメッセージ (サイズ 58)
+    ctx.font = `bold 58px ${FONT_FAMILY}`;
+    ctx.textAlign = 'center';
+    
+    ctx.strokeText(customMessage, 600, 520);
+    ctx.fillText(customMessage, 600, 520);
+
+    return new AttachmentBuilder(canvas.toBuffer(), { name: 'quit.png' });
 }
 
 async function createQuitCard(member, customMessage) {
