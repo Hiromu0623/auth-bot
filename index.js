@@ -18,9 +18,31 @@ const {
 } = require('discord.js');
 const crypto = require('crypto');
 const { Captcha } = require('captcha-canvas'); // 画像認証用
-const { createCanvas } = require('canvas'); // 入退室カード生成用
+const { createCanvas, GlobalFonts, registerFont } = require('@napi-rs/canvas') || require('canvas'); // Canvasフォント読み込み用
 const fs = require('fs');
 const path = require('path');
+
+// ----------------------------------------------------
+// 日本語フォントの読み込み設定
+// ----------------------------------------------------
+const fontPath = path.join(__dirname, 'font.ttf'); // font.ttf をプロジェクト直下に置いてください
+let FONT_FAMILY = 'sans-serif';
+
+if (fs.existsSync(fontPath)) {
+    try {
+        if (GlobalFonts && GlobalFonts.registerFromPath) {
+            GlobalFonts.registerFromPath(fontPath, 'CustomJapaneseFont');
+        } else if (registerFont) {
+            registerFont(fontPath, { family: 'CustomJapaneseFont' });
+        }
+        FONT_FAMILY = 'CustomJapaneseFont, sans-serif';
+        console.log('日本語フォント (font.ttf) の読み込みに成功しました！');
+    } catch (e) {
+        console.error('フォント読み込みエラー:', e);
+    }
+} else {
+    console.warn('⚠️ font.ttf が見つかりません。日本語が文字化け（豆腐）する可能性があります。');
+}
 
 // ボットのクライアントを作成
 const client = new Client({
@@ -116,14 +138,14 @@ async function createWelcomeCard(member, customMessage) {
     const startY = 220;
 
     // 1. ユーザー名 (サイズ 73.8)
-    ctx.font = 'bold 73.8px sans-serif';
+    ctx.font = `bold 73.8px ${FONT_FAMILY}`;
     const userName = member.user.username;
     ctx.fillText(userName, startX, startY);
     const userNameWidth = ctx.measureText(userName).width;
     ctx.fillText('さん', startX + userNameWidth + 10, startY);
 
     // 2. が [サーバー名] に参加しました！ (サイズ 58)
-    ctx.font = 'bold 58px sans-serif';
+    ctx.font = `bold 58px ${FONT_FAMILY}`;
     const line2Y = startY + 110;
     ctx.fillText('が', startX, line2Y);
 
@@ -135,7 +157,7 @@ async function createWelcomeCard(member, customMessage) {
     ctx.fillText('に参加しました！', startX + gaWidth + 20 + guildNameWidth + 10, line2Y);
 
     // 3. 真ん中の一番下側のカスタムメッセージ (サイズ 58)
-    ctx.font = 'bold 58px sans-serif';
+    ctx.font = `bold 58px ${FONT_FAMILY}`;
     ctx.textAlign = 'center';
     ctx.fillText(customMessage, 600, 530);
 
@@ -165,14 +187,14 @@ async function createQuitCard(member, customMessage) {
     const startY = 220;
 
     // 1. ユーザー名 + さん (サイズ 73.8)
-    ctx.font = 'bold 73.8px sans-serif';
+    ctx.font = `bold 73.8px ${FONT_FAMILY}`;
     const userName = member.user.username;
     ctx.fillText(userName, startX, startY);
     const userNameWidth = ctx.measureText(userName).width;
     ctx.fillText('さん', startX + userNameWidth + 10, startY);
 
     // 2. が [サーバー名] を退出しました。 (サイズ 58)
-    ctx.font = 'bold 58px sans-serif';
+    ctx.font = `bold 58px ${FONT_FAMILY}`;
     const line2Y = startY + 110;
     ctx.fillText('が', startX, line2Y);
 
@@ -184,7 +206,7 @@ async function createQuitCard(member, customMessage) {
     ctx.fillText('を退出しました。', startX + gaWidth + 20 + guildNameWidth + 10, line2Y);
 
     // 3. カスタムメッセージ (サイズ 58)
-    ctx.font = 'bold 58px sans-serif';
+    ctx.font = `bold 58px ${FONT_FAMILY}`;
     ctx.textAlign = 'center';
     ctx.fillText(customMessage, 600, 530);
 
