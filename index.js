@@ -369,21 +369,33 @@ client.on(Events.InteractionCreate, async interaction => {
                 return interaction.reply({ content: '# 認証完了\nあなたは既に認証が完了しています！', flags: MessageFlags.Ephemeral });
             }
 
+            console.log('[Auth] 認証ボタンが押されました。処理を開始します...');
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
             
-            // あとでメッセージを書き換えるためにインタラクションを保持
             pendingAuthInteractions.set(interaction.user.id, interaction);
 
             const token = crypto.randomBytes(32).toString('hex');
+            console.log('[Auth] トークン生成完了:', token);
             
             try {
+                console.log('[Auth] Cloudflare APIへ通信送信中...');
                 const response = await fetch('https://hiromu0623-discord-auth.pages.dev/api/verify', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'register', token: token, guildId: interaction.guildId, userId: interaction.user.id })
                 });
-                const result = JSON.parse(await response.text());
-                if (!result.success) return interaction.editReply({ content: '認証の初期化に失敗しました。' });
+                
+                console.log('[Auth] Cloudflareからのレスポンス受信 Status:', response.status);
+                const text = await response.text();
+                console.log('[Auth] レスポンス本文:', text);
+                
+                const result = JSON.parse(text);
+                if (!result.success) {
+                    console.log('[Auth] APIがエラーを返しました:', result.error);
+                    return interaction.editReply({ content: '認証の初期化に失敗しました。' });
+                }
             } catch (err) {
+                console.error('[Auth] 通信または解析でエラー発生:', err);
                 return interaction.editReply({ content: '通信エラーが発生しました。' });
             }
 
@@ -397,6 +409,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 content: '認証用のリンクを発行しました！以下のリンクからログインを進めてください',
                 components: [linkRow]
             });
+            console.log('[Auth] 認証リンクの送信が完了しました！');
         }
         
         // 2. 別の方法（画像認証生成）ボタン
