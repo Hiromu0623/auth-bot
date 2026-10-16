@@ -889,5 +889,51 @@ client.login(process.env.DISCORD_BOT_TOKEN);
 const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// JSONリクエストをパースできるようにする
+app.use(express.json());
+
 app.get('/', (req, res) => res.send('Bot is running!'));
+
+// 認証の成功・失敗ログを受信するAPIエンドポイント
+app.post('/api/auth-log', async (req, res) => {
+    const { guildId, userId, success, ip, userAgent, error } = req.body;
+    
+    if (!guildId) {
+        return res.status(400).json({ success: false, error: 'guildId is required' });
+    }
+
+    // サーバーのセキュリティ設定からログチャンネルを取得
+    const settings = securitySettings.get(guildId);
+    if (settings && settings.logChannelId) {
+        const channel = client.channels.cache.get(settings.logChannelId);
+        if (channel) {
+            const userMention = userId ? `<@${userId}> (${userId})` : '不明なユーザー';
+            const clientIp = ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '不明';
+            const ua = userAgent || req.headers['user-agent'] || '不明';
+
+            if (success) {
+                // 認証成功時のログ
+                await channel.send(
+                    `✅ **認証成功ログ**\n` +
+                    `👤 ユーザー: ${userMention}\n` +
+                    `🌐 ネットワークID (IP): \`${clientIp}\`\n` +
+                    `💻 ブラウザ情報: \`${ua}\``
+                ).catch(() => {});
+            } else {
+                // 認証失敗時のログ（詳細・ネットワークID付き）
+                await channel.send(
+                    `❌ **認証失敗ログ**\n` +
+                    `👤 ユーザー: ${userMention}\n` +
+                    `⚠️ 理由: ${error || '不明なエラー'}\n` +
+                    `🌐 ネットワークID (IP): \`${clientIp}\`\n` +
+                    `💻 ブラウザ情報: \`${ua}\``
+                ).catch(() => {});
+            }
+        }
+    }
+
+    res.json({ success: true });
+});
+
 app.listen(PORT, () => console.log(`Web server is running on port ${PORT}`));
